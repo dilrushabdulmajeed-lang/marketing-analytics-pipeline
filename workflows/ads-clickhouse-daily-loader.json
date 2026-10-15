@@ -1,0 +1,286 @@
+{
+  "name": "Ads → ClickHouse daily loader",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -64,
+        -176
+      ],
+      "id": "033dae58-f3c8-4c7b-9895-0e2cac5312f4",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -64,
+        0
+      ],
+      "id": "efc6e4f4-6de1-4620-b835-9247dfc72eb3",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": " // Simulates the Google Ads API: returns daily rows per campaign × ad group × device.\n  // In production, replace this node with a real Google Ads API call.\n\n  const data = $input.first().json.data ?? [];\n  const dates = data.map(row => row.date).filter(Boolean);\n  if (dates.length === 0) return [];   // nothing missing -> stop quietly\n\n  // campaign_id: [type, daily budget, conversion rate]\n  const campaigns = {\n    101: ['Search', 150, 0.08],   102: ['Search', 400, 0.03],  103: ['Search', 250, 0.015],\n    104: ['Search', 350, 0.03],   105: ['PMax', 600, 0.025],   106: ['PMax', 450, 0.025],\n    107: ['Display', 200, 0.006], 108: ['Display', 300, 0.003],\n    109: ['YouTube', 350, 0.0008], 110: ['Search', 180, 0.03],\n  };\n  const ctrByType = { Search: 0.065, PMax: 0.022, Display: 0.006, YouTube: 0.004 };\n  const cpcByType = { Search: 1.9, PMax: 1.4, Display: 0.35, YouTube: 0.12 };\n  const devices = { Mobile: 0.62, Desktop: 0.31, Tablet: 0.07 };\n  const adGroups = ['Core', 'Offers', 'Long-tail'];\n  const rand = (min, max) => min + Math.random() * (max - min);\n\n  const rows = [];\n  for (const date of dates) {\n    const dow = new Date(date + 'T00:00:00Z').getUTCDay();   // 5 = Fri, 6 = Sat\n    const season = (dow === 5 || dow === 6) ? 0.85 : 1.0;\n\n    for (const [id, [type, budget, cvr]] of Object.entries(campaigns)) {\n      for (const adGroup of adGroups) {\n        for (const [device, share] of Object.entries(devices)) {\n          const ctr = ctrByType[type], cpc = cpcByType[type];\n          const impressions = Math.round(budget / cpc / ctr / 3 * share * season * rand(0.8, 1.2));\n          const clicks = Math.round(impressions * ctr * (device === 'Desktop' ? 1.15 : 1) * rand(0.85, 1.15));\n          const cost = +(clicks * cpc * rand(0.85, 1.15)).toFixed(2);\n          const conversions = +(clicks * cvr * (device === 'Mobile' ? 0.8 : 1.15) * rand(0.7, 1.3)).toFixed(2);\n          const value = Number(id) === 110 ? 0 : +(conversions * 300 * rand(0.8, 1.2)).toFixed(2);\n\n          rows.push({ date, campaign_id: Number(id), ad_group: adGroup, device,\n                      impressions, clicks, cost, conversions, conversion_value: value });\n        }\n      }\n    }\n  }\n\n  // ClickHouse JSONEachRow format = one JSON object per line\n  return [{ json: {\n    dates,\n    row_count: rows.length,\n    body: rows.map(r => JSON.stringify(r)).join('\\n'),\n  }}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -96
+      ],
+      "id": "3fe5c56a-dd78-4e79-a755-9a3bcf4e6d17",
+      "name": "Simulate Google Ads API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://clickhouse:8123/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "SELECT toString(d) AS date   FROM (     SELECT (SELECT max(date) FROM analytics.ads_daily) + number + 1 AS d     FROM numbers(30)   )   WHERE d < today()   FORMAT JSON",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        208,
+        -96
+      ],
+      "id": "e07929e2-0788-4396-be42-c8aee36674c6",
+      "name": "Find missing days",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "TfAaWEbdjhye6fu3",
+          "name": "ClickHouse (n8n_loader)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://clickhouse:8123/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO analytics.ads_daily FORMAT JSONEachRow"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "=  {{ $json.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        656,
+        -96
+      ],
+      "id": "f0f539d9-97c2-4f7e-b762-cc1f9be7a663",
+      "name": "Insert into ClickHouse",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "TfAaWEbdjhye6fu3",
+          "name": "ClickHouse (n8n_loader)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": " http://clickhouse:8123/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain",
+        "body": "=  SELECT\n    count()                                                         AS rows_loaded,\n    {{ $('Simulate Google Ads API').first().json.row_count }}      AS rows_expected,\n    countIf(cost < 0 OR clicks > impressions OR conversions > clicks) AS bad_rows,\n    rows_loaded = rows_expected AND bad_rows = 0                    AS passed\n  FROM analytics.ads_daily FINAL\n  WHERE date IN ('{{ $('Simulate Google Ads API').first().json.dates.join(\"','\") }}')\n  SETTINGS output_format_json_quote_64bit_integers = 0\n  FORMAT JSON",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        -96
+      ],
+      "id": "8d645ae8-a731-40da-bcc8-97f862f430dc",
+      "name": "Data quality check",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "TfAaWEbdjhye6fu3",
+          "name": "ClickHouse (n8n_loader)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d3f72236-44de-452f-baab-e842408dcc77",
+              "leftValue": "={{ $json.data[0].passed }}",
+              "rightValue": "=1",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1104,
+        -96
+      ],
+      "id": "2365e5b5-17a0-403a-ac45-6a795ff6210c",
+      "name": "passed?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        -192
+      ],
+      "id": "071ec7f6-39db-4656-be37-a5c77c668f08",
+      "name": "done"
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Data quality failed: {{ $json.data[0].rows_loaded }}/{{ $json.data[0].rows_expected }} rows, {{ $json.data[0].bad_rows }} bad rows"
+      },
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        0
+      ],
+      "id": "6508aaae-baed-41d2-bbf6-1326a8e19c0d",
+      "name": "Fail: data quality"
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Find missing days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Find missing days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find missing days": {
+      "main": [
+        [
+          {
+            "node": "Simulate Google Ads API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simulate Google Ads API": {
+      "main": [
+        [
+          {
+            "node": "Insert into ClickHouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert into ClickHouse": {
+      "main": [
+        [
+          {
+            "node": "Data quality check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data quality check": {
+      "main": [
+        [
+          {
+            "node": "passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "passed?": {
+      "main": [
+        [
+          {
+            "node": "done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail: data quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}
