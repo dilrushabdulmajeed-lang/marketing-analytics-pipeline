@@ -1,3 +1,11 @@
 .env
 *.tar.gz
 .DS_Store
+exports/
+backups/
+
+# Project 2 lives in ~/ecommerce-analytics (shared local lab)
+sql/03_ecom_*
+sql/04_ecom_*
+docs/screenshots/ecommerce-*
+workflows/weekly-at-risk-*

@@ -10,8 +10,10 @@ services:
       - TZ=Asia/Dubai
       - N8N_SECURE_COOKIE=false
       - N8N_RUNNERS_ENABLED=true
+      - N8N_RESTRICT_FILE_ACCESS_TO=/home/node/exports
     volumes:
       - n8n_data:/home/node/.n8n
+      - ./exports:/home/node/exports
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
       interval: 10s
